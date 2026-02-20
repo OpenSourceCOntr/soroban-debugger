@@ -46,6 +46,41 @@ impl EventInspector {
         Ok(contract_events)
     }
 
+    /// Extract diagnostic events from the host
+    #[cfg(any(test, feature = "testutils"))]
+    pub fn get_diagnostic_events(host: &Host) -> Result<Vec<ContractEvent>> {
+        let events = host.get_diagnostic_events()?.0;
+        let mut contract_events = Vec::new();
+
+        for host_event in events.iter() {
+            let event = &host_event.event;
+
+            // Extract topics and data from event body
+            let (topics, data) = match &event.body {
+                ContractEventBody::V0(v0) => {
+                    let mut topics = Vec::new();
+                    for topic in v0.topics.iter() {
+                        topics.push(format!("{:?}", topic));
+                    }
+                    let data = format!("{:?}", v0.data);
+                    (topics, data)
+                }
+            };
+
+            // Parse contract ID
+            // contract_id is Option<Hash>
+            let contract_id = event.contract_id.as_ref().map(|h| format!("{:?}", h));
+
+            contract_events.push(ContractEvent {
+                contract_id,
+                topics,
+                data,
+            });
+        }
+
+        Ok(contract_events)
+    }
+
     /// Filter events by a topic string
     pub fn filter_events(events: &[ContractEvent], topic_filter: &str) -> Vec<ContractEvent> {
         events

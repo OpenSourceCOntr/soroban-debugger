@@ -122,6 +122,23 @@ impl StorageInspector {
     /// Prints a notice when filtering is active.
     pub fn display_filtered(&self, filter: &StorageFilter) {
         if self.storage.is_empty() {
+            println!("Storage: (empty)");
+            return;
+        }
+
+        if !filter.is_empty() {
+            println!("Storage (filtered by: {}):", filter.summary());
+        } else {
+            println!("Storage:");
+        }
+
+        let mut matched = 0;
+        let mut keys: Vec<&String> = self.storage.keys().collect();
+        keys.sort();
+
+        for key in keys {
+            if filter.matches(key) {
+                println!("  {} = {}", key, self.storage[key]);
             tracing::info!("Storage is empty");
             return;
         }
@@ -137,6 +154,13 @@ impl StorageInspector {
         }
 
         if matched == 0 && !filter.is_empty() {
+            println!("  (no entries matched the filter)");
+        }
+
+        if !filter.is_empty() {
+            let total = self.storage.len();
+            println!("\n  Showing {}/{} entries", matched, total);
+        }
             tracing::info!("No storage entries matched the filter");
         }
 

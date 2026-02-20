@@ -58,12 +58,20 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
         None
     };
 
+    // Handle --repeat N: run N times and show aggregate stats
+    if let Some(n) = args.repeat {
     if let Some(n) = args.repeat {
         logging::log_repeat_execution(&args.function, n as usize);
         let runner = RepeatRunner::new(wasm_bytes, args.breakpoint, initial_storage);
         let stats = runner.run(&args.function, parsed_args.as_deref(), n)?;
         stats.display();
         return Ok(());
+    }
+
+    println!("\nStarting debugger...");
+    println!("Function: {}", args.function);
+    if let Some(ref args) = parsed_args {
+        println!("Arguments: {}", args);
     }
 
     print_info("\nStarting debugger...");
@@ -73,6 +81,19 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     }
     logging::log_execution_start(&args.function, parsed_args.as_deref());
 
+    for extra in &args.extra_contract {
+        let parts: Vec<&str> = extra.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("Invalid extra contract format: {}. Expected alias=path.wasm", extra);
+        }
+        let alias = parts[0];
+        let path = parts[1];
+        let extra_wasm_bytes = fs::read(path)
+            .with_context(|| format!("Failed to read extra WASM file for {}: {}", alias, path))?;
+        executor.register_extra_contract(alias, &extra_wasm_bytes)?;
+    }
+
+    // Set up initial storage if provided
     let mut executor = ContractExecutor::new(wasm_bytes)?;
     if let Some(storage) = initial_storage {
         executor.set_initial_storage(storage)?;
@@ -113,6 +134,11 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
         }
     }
 
+    // Display storage with optional filtering
+    if !args.storage_filter.is_empty() {
+        let storage_filter = crate::inspector::storage::StorageFilter::new(&args.storage_filter)
+            .map_err(|e| anyhow::anyhow!("Invalid storage filter: {}", e))?;
+        println!("\n--- Storage ---");
     if !args.storage_filter.is_empty() {
         let storage_filter = crate::inspector::storage::StorageFilter::new(&args.storage_filter)
             .map_err(|e| anyhow::anyhow!("Invalid storage filter: {}", e))?;
@@ -123,6 +149,7 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
         inspector.display_filtered(&storage_filter);
     }
 
+    // Display auth tree if requested
     if args.show_auth {
         let auth_tree = engine.executor().get_auth_tree()?;
         if args.json {
@@ -131,6 +158,47 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
         } else {
             println!("\n--- Authorizations ---");
             crate::inspector::auth::AuthInspector::display(&auth_tree);
+        }
+    }
+
+    // Display Call Trace
+    #[cfg(any(test, feature = "testutils"))]
+    {
+        if let Ok(diagnostic_events) = engine.executor().get_diagnostic_events() {
+            let mut indent = 0;
+            println!("\n--- Call Trace ---");
+            for event in diagnostic_events {
+                // Determine if it's fn_call or fn_return
+                if let Some(first_topic) = event.topics.first() {
+                    if first_topic.contains("fn_call") {
+                        // Extract target contract and function
+                        let target_contract = match event.topics.get(1) {
+                            Some(c) => engine.executor().resolve_alias(c.trim_matches('"')),
+                            None => "Unknown".to_string(),
+                        };
+                        let function = match event.topics.get(2) {
+                            Some(f) => f.to_string(),
+                            None => "Unknown".to_string(),
+                        };
+                        
+                        let prefix = "  ".repeat(indent);
+                        println!("{}-> Call {}::{}", prefix, target_contract, function);
+                        indent += 1;
+                    } else if first_topic.contains("fn_return") {
+                        if indent > 0 {
+                            indent -= 1;
+                        }
+                        
+                        let function = match event.topics.get(1) {
+                            Some(f) => f.to_string(),
+                            None => "Unknown".to_string(),
+                        };
+                        
+                        let prefix = "  ".repeat(indent);
+                        println!("{}<- Return {} = {}", prefix, function, event.data);
+                    }
+                }
+            }
         }
     }
 
@@ -162,6 +230,22 @@ pub fn interactive(args: InteractiveArgs, _verbosity: Verbosity) -> Result<()> {
         logging::log_display(loaded_snapshot.format_summary(), logging::LogLevel::Info);
     }
 
+    // Create executor
+    let mut executor = ContractExecutor::new(wasm_bytes)?;
+
+    for extra in &args.extra_contract {
+        let parts: Vec<&str> = extra.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("Invalid extra contract format: {}. Expected alias=path.wasm", extra);
+        }
+        let alias = parts[0];
+        let path = parts[1];
+        let extra_wasm_bytes = fs::read(path)
+            .with_context(|| format!("Failed to read extra WASM file for {}: {}", alias, path))?;
+        executor.register_extra_contract(alias, &extra_wasm_bytes)?;
+    }
+
+    // Create debugger engine
     let executor = ContractExecutor::new(wasm_bytes)?;
     let engine = DebuggerEngine::new(executor, vec![]);
 
@@ -292,6 +376,18 @@ pub fn optimize(args: OptimizeArgs, _verbosity: Verbosity) -> Result<()> {
     };
 
     let mut executor = ContractExecutor::new(wasm_bytes)?;
+
+    for extra in &args.extra_contract {
+        let parts: Vec<&str> = extra.splitn(2, '=').collect();
+        if parts.len() != 2 {
+            anyhow::bail!("Invalid extra contract format: {}. Expected alias=path.wasm", extra);
+        }
+        let alias = parts[0];
+        let path = parts[1];
+        let extra_wasm_bytes = fs::read(path)
+            .with_context(|| format!("Failed to read extra WASM file for {}: {}", alias, path))?;
+        executor.register_extra_contract(alias, &extra_wasm_bytes)?;
+    }
 
     if let Some(storage_json) = &args.storage {
         let storage = parse_storage(storage_json)?;

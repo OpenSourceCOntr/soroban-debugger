@@ -2,12 +2,14 @@ use crate::utils::ArgumentParser;
 use crate::{DebuggerError, Result};
 use soroban_env_host::{DiagnosticLevel, Host};
 use soroban_sdk::{Address, Env, InvokeError, Symbol, Val, Vec as SorobanVec};
+use std::collections::HashMap;
 use tracing::{info, warn};
 
 /// Executes Soroban contracts in a test environment
 pub struct ContractExecutor {
     env: Env,
     contract_address: Address,
+    extra_contracts: HashMap<String, String>,
 }
 
 impl ContractExecutor {
@@ -17,6 +19,7 @@ impl ContractExecutor {
 
         // Create a test environment
         let env = Env::default();
+        let _ = env.host().set_diagnostic_level(DiagnosticLevel::Debug);
 
         // Enable diagnostic events
         env.host()
@@ -31,7 +34,17 @@ impl ContractExecutor {
         Ok(Self {
             env,
             contract_address,
+            extra_contracts: HashMap::new(),
         })
+    }
+
+    /// Register an additional contract and associate it with an alias
+    pub fn register_extra_contract(&mut self, alias: &str, wasm: &[u8]) -> Result<()> {
+        let address = self.env.register(wasm, ());
+        let address_str = address.to_string().to_string();
+        info!("Registered extra contract '{}' at {}", alias, address_str);
+        self.extra_contracts.insert(alias.to_string(), address_str);
+        Ok(())
     }
 
     /// Execute a contract function
@@ -41,8 +54,20 @@ impl ContractExecutor {
         // Convert function name to Symbol
         let func_symbol = Symbol::new(&self.env, function);
 
+        // Substitute aliases in arguments if they exist
+        let substituted_args = args.map(|a| {
+            let mut result = a.to_string();
+            for (alias, address) in &self.extra_contracts {
+                // Replace "alias" with "C..." in JSON arguments
+                let search = format!("\"{}\"", alias);
+                let replace = format!("\"{}\"", address);
+                result = result.replace(&search, &replace);
+            }
+            result
+        });
+
         // Parse arguments (simplified for now)
-        let parsed_args = if let Some(args_json) = args {
+        let parsed_args = if let Some(args_json) = substituted_args.as_deref() {
             self.parse_args(args_json)?
         } else {
             vec![]
@@ -132,11 +157,32 @@ impl ContractExecutor {
             DebuggerError::InvalidArguments(e.to_string()).into()
         })
     }
+
     /// Get events captured during execution
     pub fn get_events(&self) -> Result<Vec<crate::inspector::events::ContractEvent>> {
         crate::inspector::events::EventInspector::get_events(self.env.host())
     }
 
+    /// Get diagnostic events (used for call tracing)
+    #[cfg(any(test, feature = "testutils"))]
+    pub fn get_diagnostic_events(&self) -> Result<Vec<crate::inspector::events::ContractEvent>> {
+        crate::inspector::events::EventInspector::get_diagnostic_events(self.env.host())
+    }
+
+    /// Attempts to reverse-map a registered generated address to the user-provided alias
+    pub fn resolve_alias(&self, address: &str) -> String {
+        for (alias, registered_addr) in &self.extra_contracts {
+            if registered_addr == address {
+                return alias.clone();
+            }
+        }
+        
+        // Also check main contract address
+        if address == self.contract_address.to_string().to_string() {
+            return "main".to_string();
+        }
+
+        address.to_string()
     /// Get diagnostic events from the host
     pub fn get_diagnostic_events(&self) -> Result<Vec<soroban_env_host::xdr::ContractEvent>> {
         Ok(self
