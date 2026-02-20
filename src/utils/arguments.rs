@@ -341,7 +341,10 @@ impl ArgumentParser {
         if value.is_null() {
             debug!("Converting option: null -> None (void)");
             Val::try_from_val(&self.env, &()).map_err(|e| {
-                ArgumentParseError::ConversionError(format!("Failed to convert void to Val: {:?}", e))
+                ArgumentParseError::ConversionError(format!(
+                    "Failed to convert void to Val: {:?}",
+                    e
+                ))
             })
         } else {
             debug!("Converting option: {} -> Some", value);
@@ -355,10 +358,12 @@ impl ArgumentParser {
         value: &Value,
         obj: &serde_json::Map<String, Value>,
     ) -> Result<Val, ArgumentParseError> {
-        let arr = value.as_array().ok_or_else(|| ArgumentParseError::TypeMismatch {
-            expected: "array for tuple".to_string(),
-            actual: format!("{}", value),
-        })?;
+        let arr = value
+            .as_array()
+            .ok_or_else(|| ArgumentParseError::TypeMismatch {
+                expected: "array for tuple".to_string(),
+                actual: format!("{}", value),
+            })?;
 
         if let Some(arity) = obj.get("arity") {
             let expected_arity = arity.as_u64().ok_or_else(|| {
@@ -383,7 +388,10 @@ impl ArgumentParser {
             Value::Null => {
                 debug!("Converting null to void (Option::None)");
                 Val::try_from_val(&self.env, &()).map_err(|e| {
-                    ArgumentParseError::ConversionError(format!("Failed to convert void to Val: {:?}", e))
+                    ArgumentParseError::ConversionError(format!(
+                        "Failed to convert void to Val: {:?}",
+                        e
+                    ))
                 })
             }
             Value::Bool(b) => {
