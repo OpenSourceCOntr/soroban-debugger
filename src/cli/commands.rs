@@ -1,5 +1,6 @@
 use crate::cli::args::{InspectArgs, InteractiveArgs, OptimizeArgs, RunArgs, UpgradeCheckArgs};
 use crate::debugger::engine::DebuggerEngine;
+use crate::repeat::RepeatRunner;
 use crate::runtime::executor::ContractExecutor;
 use crate::simulator::SnapshotLoader;
 use crate::ui::tui::DebuggerUI;
@@ -39,6 +40,14 @@ pub fn run(args: RunArgs) -> Result<()> {
     } else {
         None
     };
+
+    // Handle --repeat N: run N times and show aggregate stats
+    if let Some(n) = args.repeat {
+        let runner = RepeatRunner::new(wasm_bytes, args.breakpoint, initial_storage);
+        let stats = runner.run(&args.function, parsed_args.as_deref(), n)?;
+        stats.display();
+        return Ok(());
+    }
 
     println!("\nStarting debugger...");
     println!("Function: {}", args.function);

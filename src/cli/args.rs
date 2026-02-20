@@ -65,6 +65,10 @@ pub struct RunArgs {
     /// Filter events by topic
     #[arg(long)]
     pub filter_topic: Option<String>,
+
+    /// Execute the contract call N times for stress testing
+    #[arg(long)]
+    pub repeat: Option<u32>,
 }
 
 #[derive(Parser)]

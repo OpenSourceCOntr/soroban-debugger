@@ -3,6 +3,7 @@ pub mod cli;
 pub mod debugger;
 pub mod inspector;
 pub mod profiler;
+pub mod repeat;
 pub mod runtime;
 pub mod simulator;
 pub mod ui;

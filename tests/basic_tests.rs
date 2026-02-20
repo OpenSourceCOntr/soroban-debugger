@@ -42,3 +42,13 @@ fn test_run_command_event_flags() {
         .stdout(predicate::str::contains("--show-events"))
         .stdout(predicate::str::contains("--filter-topic"));
 }
+
+#[test]
+fn test_run_command_repeat_flag() {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_soroban-debug"));
+    cmd.arg("run").arg("--help");
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("--repeat"))
+        .stdout(predicate::str::contains("stress testing"));
+}
