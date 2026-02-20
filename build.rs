@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 // Mock crate root modules that src/cli/args.rs depends on
+#[allow(dead_code)]
 mod config {
     pub struct Config {
         pub debug: DebugConfig,
@@ -18,6 +19,7 @@ mod config {
     }
 }
 
+#[allow(dead_code)]
 #[path = "src/cli/args.rs"]
 mod args;
 
@@ -44,8 +46,8 @@ fn render_recursive(cmd: &clap::Command, out_dir: &Path, prefix: &str) -> std::i
         format!("{}-{}", prefix, cmd.get_name())
     };
 
-    let cmd = cmd.clone().name(&name);
-    let man = clap_mangen::Man::new(cmd);
+    let cmd = cmd.clone().name(name.clone());
+    let man = clap_mangen::Man::new(cmd.clone());
     let mut buffer: Vec<u8> = Default::default();
     man.render(&mut buffer)?;
     fs::write(out_dir.join(format!("{}.1", name)), buffer)?;
