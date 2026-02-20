@@ -189,12 +189,7 @@ impl RepeatRunner {
     }
 
     /// Run the contract function `n` times and return aggregate stats.
-    pub fn run(
-        &self,
-        function: &str,
-        args: Option<&str>,
-        n: u32,
-    ) -> Result<AggregateStats> {
+    pub fn run(&self, function: &str, args: Option<&str>, n: u32) -> Result<AggregateStats> {
         println!("Running {} iteration(s) of '{}'...\n", n, function);
 
         let mut all_runs = Vec::with_capacity(n as usize);
