@@ -4,7 +4,6 @@ use crate::Result;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write;
-use anyhow::anyhow;
 
 #[derive(Debug, Clone)]
 pub struct OperationCost {
@@ -146,12 +145,6 @@ match exec_result {
         .into());
     }
 }
-
-        let metrics = session.finish();
-
-        let total_cpu = metrics.cpu_instructions;
-        let total_memory = metrics.memory_bytes;
-        let wall_time_ms = metrics.wall_time.as_millis();
 
         let profile = FunctionProfile {
             name: function_name.to_string(),
