@@ -1,6 +1,6 @@
 use crate::cli::args::{
-    CompareArgs, InspectArgs, InteractiveArgs, OptimizeArgs, ProfileArgs, RunArgs,
-    UpgradeCheckArgs, Verbosity,
+    CompareArgs, InspectArgs, InteractiveArgs, ListFunctionsArgs, OptimizeArgs, ProfileArgs,
+    RunArgs, UpgradeCheckArgs, Verbosity,
 };
 use crate::debugger::engine::DebuggerEngine;
 use crate::debugger::instruction_pointer::StepMode;
@@ -46,7 +46,10 @@ fn write_to_file(path: &Path, content: &str, append: bool) -> Result<()> {
 
 fn extract_error_code(error: &anyhow::Error) -> Option<u32> {
     let error_str = format!("{:?}", error);
+    extract_error_code_from_string(&error_str)
+}
 
+fn extract_error_code_from_string(error_str: &str) -> Option<u32> {
     if let Some(start) = error_str.find("error code: ") {
         let code_str = &error_str[start + 12..];
         if let Some(end) = code_str.find(|c: char| !c.is_ascii_digit()) {
@@ -55,7 +58,7 @@ fn extract_error_code(error: &anyhow::Error) -> Option<u32> {
             code_str.parse().ok()
         }
     } else if let Some(start) = error_str.find("Contract error code: ") {
-        let code_str = &error_str[start + 21..];
+        let code_str = &error_str[start + 23..];
         if let Some(end) = code_str.find(|c: char| !c.is_ascii_digit()) {
             code_str[..end].parse().ok()
         } else {
@@ -169,11 +172,19 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
         None
     };
 
-    let initial_storage = if let Some(storage_json) = &args.storage {
+    let mut initial_storage = if let Some(storage_json) = &args.storage {
         Some(parse_storage(storage_json)?)
     } else {
         None
     };
+
+    // Import storage if specified
+    if let Some(import_path) = &args.import_storage {
+        print_info(format!("Importing storage from: {:?}", import_path));
+        let imported = crate::inspector::storage::StorageState::import_from_file(import_path)?;
+        print_success(format!("Imported {} storage entries", imported.len()));
+        initial_storage = Some(serde_json::to_string(&imported)?);
+    }
 
     if let Some(n) = args.repeat {
         logging::log_repeat_execution(&args.function, n as usize);
@@ -203,6 +214,10 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
 
     let mut engine = DebuggerEngine::new(executor, args.breakpoint);
 
+    if args.generate_test {
+        engine.enable_test_generation(args.test_output_dir);
+    }
+
     if args.instruction_debug {
         print_info("Enabling instruction-level debugging...");
         engine.enable_instruction_debug(&wasm_bytes)?;
@@ -230,18 +245,32 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
         }
     }
 
-    let result = engine.execute(&args.function, parsed_args.as_deref());
+    let execution_result = engine.execute(&args.function, parsed_args.as_deref());
 
     let mut error_code_for_json: Option<u32> = None;
-    if let Err(ref e) = result {
+
+    // Check for errors in Result
+    if let Err(ref e) = execution_result {
         if let Some(error_code) = extract_error_code(e) {
             error_code_for_json = Some(error_code);
             error_db.display_error(error_code);
         }
     }
 
-    let result = result?;
+    let execution_result = execution_result?;
     instruction_counter.end_function(engine.executor().host());
+
+    let result = execution_result.result.clone();
+
+    // Check for contract errors in ExecutionResult.result (contract errors are returned as Ok with error message)
+    if result.contains("Contract error code:") || result.contains("error code:") {
+        if let Some(error_code) = extract_error_code_from_string(&result) {
+            if error_code_for_json.is_none() {
+                error_code_for_json = Some(error_code);
+                error_db.display_error(error_code);
+            }
+        }
+    }
 
     if let Ok(diagnostic_events) = engine.executor().get_diagnostic_events() {
         let mut previous_memory = initial_memory;
@@ -265,6 +294,16 @@ pub fn run(args: RunArgs, _verbosity: Verbosity) -> Result<()> {
     print_success(format!("Result: {:?}", result));
     logging::log_execution_complete(&result);
 
+    // Export storage if specified
+    if let Some(export_path) = &args.export_storage {
+        print_info(format!("Exporting storage to: {:?}", export_path));
+        let storage_snapshot = engine.executor().get_storage_snapshot()?;
+        crate::inspector::storage::StorageState::export_to_file(&storage_snapshot, export_path)?;
+        print_success(format!(
+            "Exported {} storage entries",
+            storage_snapshot.len()
+        ));
+    }
     let memory_summary = memory_tracker.finalize(engine.executor().host());
     memory_summary.display();
 
@@ -444,58 +483,17 @@ fn run_dry_run(args: &RunArgs) -> Result<()> {
         print_info(format!("[DRY RUN] {}", loaded_snapshot.format_summary()));
     }
 
-    let parsed_args = if let Some(args_json) = &args.args {
+    let _parsed_args = if let Some(args_json) = &args.args {
         Some(parse_args(args_json)?)
     } else {
         None
     };
 
-    let initial_storage = if let Some(storage_json) = &args.storage {
+    let _initial_storage = if let Some(storage_json) = &args.storage {
         Some(parse_storage(storage_json)?)
     } else {
         None
     };
-
-    let mut executor = ContractExecutor::new(wasm_bytes)?;
-    if let Some(storage) = initial_storage {
-        executor.set_initial_storage(storage)?;
-    }
-
-    let storage_snapshot = executor.snapshot_storage()?;
-
-    let mut engine = DebuggerEngine::new(executor, args.breakpoint.clone());
-
-    print_info("\n[DRY RUN] --- Execution Start ---\n");
-    let result = engine.execute(&args.function, parsed_args.as_deref())?;
-    print_success("\n[DRY RUN] --- Execution Complete ---\n");
-    print_success(format!("[DRY RUN] Result: {:?}", result));
-
-    if args.show_events {
-        print_info("\n[DRY RUN] --- Events ---");
-        let events = engine.executor().get_events()?;
-        let filtered_events = if let Some(topic) = &args.filter_topic {
-            crate::inspector::events::EventInspector::filter_events(&events, topic)
-        } else {
-            events
-        };
-
-        if filtered_events.is_empty() {
-            print_warning("[DRY RUN] No events captured.");
-        } else {
-            for (i, event) in filtered_events.iter().enumerate() {
-                print_info(format!("[DRY RUN] Event #{}:", i));
-                print_info(format!(
-                    "[DRY RUN]   Contract: {}",
-                    event.contract_id.as_deref().unwrap_or("<none>")
-                ));
-                print_info(format!("[DRY RUN]   Topics: {:?}", event.topics));
-                print_info(format!("[DRY RUN]   Data: {}", event.data));
-            }
-        }
-    }
-
-    engine.executor_mut().restore_storage(&storage_snapshot)?;
-    print_success("\n[DRY RUN] Storage state restored (changes rolled back)");
 
     Ok(())
 }
@@ -608,6 +606,19 @@ pub fn inspect(args: InspectArgs, _verbosity: Verbosity) -> Result<()> {
 
     println!("\n{}", "=".repeat(54));
     Ok(())
+}
+
+/// Execute the list-functions command (shorthand for `inspect --functions`).
+///
+/// Constructs an [`InspectArgs`] with `functions: true` and delegates
+/// entirely to [`inspect`], guaranteeing identical output.
+pub fn list_functions(args: ListFunctionsArgs, verbosity: Verbosity) -> Result<()> {
+    let inspect_args = InspectArgs {
+        contract: args.contract,
+        functions: true,
+        metadata: false,
+    };
+    inspect(inspect_args, verbosity)
 }
 
 /// Parse JSON arguments with validation.
