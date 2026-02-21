@@ -6,7 +6,6 @@ use crate::runtime::executor::ContractExecutor;
 use crate::runtime::instruction::Instruction;
 use crate::runtime::instrumentation::Instrumenter;
 use crate::Result;
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
@@ -19,8 +18,6 @@ pub struct DebuggerEngine {
     instrumenter: Instrumenter,
     paused: bool,
     instruction_debug_enabled: bool,
-    generate_test: bool,
-    test_output_dir: Option<std::path::PathBuf>,
 }
 
 impl DebuggerEngine {
@@ -41,15 +38,7 @@ impl DebuggerEngine {
             instrumenter: Instrumenter::new(),
             paused: false,
             instruction_debug_enabled: false,
-            generate_test: false,
-            test_output_dir: None,
         }
-    }
-
-    /// Enable automatic test generation.
-    pub fn enable_test_generation(&mut self, output_dir: std::path::PathBuf) {
-        self.generate_test = true;
-        self.test_output_dir = Some(output_dir);
     }
 
     /// Enable instruction-level debugging.
@@ -86,25 +75,23 @@ impl DebuggerEngine {
     }
 
     /// Execute a contract function with debugging
-    pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<crate::runtime::executor::ExecutionResult> {
+    pub fn execute(
+        &mut self,
+        function: &str,
+        args: Option<&str>,
+    ) -> Result<crate::runtime::executor::ExecutionResult> {
+    /// Execute a contract function with debugging.
+    pub fn execute(&mut self, function: &str, args: Option<&str>) -> Result<String> {
         info!("Executing function: {}", function);
 
-        if let Ok(mut state) = self.state.lock() {
-            state.set_current_function(function.to_string());
-            state.call_stack_mut().clear();
-            state.call_stack_mut().push(function.to_string(), None);
-        }
+        // Initialize stack state
+        self.state.set_current_function(function.to_string(), args.map(|a| a.to_string()));
+        self.state.call_stack_mut().clear();
+        self.state.call_stack_mut().push(function.to_string(), None);
 
         if self.breakpoints.should_break(function) {
-            self.pause_at_function(function);
+            self.pause_at_function(function, args);
         }
-
-        // Capture initial storage if test generation is enabled
-        let storage_before = if self.generate_test {
-            crate::inspector::storage::StorageInspector::capture_snapshot(self.executor.host())
-        } else {
-            HashMap::new()
-        };
 
         let start_time = std::time::Instant::now();
         let result = self.executor.execute(function, args);
@@ -112,9 +99,10 @@ impl DebuggerEngine {
 
         // Capture final storage and generate test if enabled
         if self.generate_test {
-            let storage_after = crate::inspector::storage::StorageInspector::capture_snapshot(self.executor.host());
+            let storage_after =
+                crate::inspector::storage::StorageInspector::capture_snapshot(self.executor.host());
             let output_str = match &result {
-                Ok(out) => out.clone(),
+                Ok(out) => out.result.clone(),
                 Err(e) => format!("Error: {}", e),
             };
 
@@ -125,7 +113,9 @@ impl DebuggerEngine {
             };
 
             let codegen = crate::codegen::TestGenerator::new(
-                self.test_output_dir.clone().unwrap_or_else(|| std::path::PathBuf::from("tests/generated"))
+                self.test_output_dir
+                    .clone()
+                    .unwrap_or_else(|| std::path::PathBuf::from("tests/generated")),
             );
 
             // Paths handling
@@ -296,14 +286,11 @@ impl DebuggerEngine {
         Ok(())
     }
 
-    fn pause_at_function(&mut self, function: &str) {
-        crate::logging::log_breakpoint(function);
+    /// Pause execution at a function
+    fn pause_at_function(&mut self, function: &str, args: Option<&str>) {
         self.paused = true;
-
-        if let Ok(mut state) = self.state.lock() {
-            state.set_current_function(function.to_string());
-            state.call_stack().display();
-        }
+        self.state.set_current_function(function.to_string(), args.map(|a| a.to_string()));
+        info!("Breakpoint triggered at function: {}", function);
     }
 
     pub fn is_paused(&self) -> bool {
